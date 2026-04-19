@@ -8,8 +8,9 @@ import dayGridPlugin from '@fullcalendar/daygrid'
 import timeGridPlugin from '@fullcalendar/timegrid'
 import listPlugin from '@fullcalendar/list'
 import interactionPlugin from '@fullcalendar/interaction'
-import type { EventClickArg } from '@fullcalendar/core'
+import type { EventClickArg, DateClickArg } from '@fullcalendar/core'
 import ScheduleModal from '@/app/components/ScheduleModal'
+import CalendarBookingModal from '@/app/components/CalendarBookingModal'
 
 type CalendarEvent = {
   id: string
@@ -60,7 +61,13 @@ export default function SchedulePage() {
   const [events, setEvents] = useState<CalendarEvent[]>([])
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null)
   const [showModal, setShowModal] = useState(false)
+  const [showBooking, setShowBooking] = useState(false)
+  const [bookingDate, setBookingDate] = useState('')
+  const [bookingTime, setBookingTime] = useState<string | undefined>(undefined)
   const calendarRef = useRef<FullCalendar>(null)
+
+  // 더블클릭 감지용
+  const lastClickRef = useRef<{ time: number; dateStr: string }>({ time: 0, dateStr: '' })
 
   useEffect(() => {
     loadSchedules()
@@ -114,6 +121,36 @@ export default function SchedulePage() {
       setSelectedEvent(ev)
       setShowModal(true)
     }
+  }
+
+  function handleDateClick(info: DateClickArg) {
+    const now = Date.now()
+    const last = lastClickRef.current
+
+    if (last.dateStr === info.dateStr && now - last.time < 500) {
+      // 더블클릭 감지
+      const dateStr = info.dateStr
+      let date = dateStr
+      let time: string | undefined = undefined
+
+      if (dateStr.includes('T')) {
+        // timeGrid 뷰에서 클릭 (2025-04-19T10:00:00+09:00)
+        date = dateStr.slice(0, 10)
+        time = dateStr.slice(11, 16)
+      }
+
+      setBookingDate(date)
+      setBookingTime(time)
+      setShowBooking(true)
+      lastClickRef.current = { time: 0, dateStr: '' }
+    } else {
+      lastClickRef.current = { time: now, dateStr: info.dateStr }
+    }
+  }
+
+  function handleBookingSaved() {
+    setShowBooking(false)
+    loadSchedules()
   }
 
   return (
@@ -184,6 +221,7 @@ export default function SchedulePage() {
           }}
           events={events}
           eventClick={handleEventClick}
+          dateClick={handleDateClick}
           height="calc(100vh - 120px)"
           dayMaxEvents={4}
           nowIndicator={true}
@@ -208,6 +246,15 @@ export default function SchedulePage() {
             statusLabel={STATUS_LABEL}
             depositLabel={DEPOSIT_LABEL}
             onClose={() => setShowModal(false)}
+          />
+        )}
+
+        {showBooking && (
+          <CalendarBookingModal
+            defaultDate={bookingDate}
+            defaultTime={bookingTime}
+            onSaved={handleBookingSaved}
+            onClose={() => setShowBooking(false)}
           />
         )}
       </div>

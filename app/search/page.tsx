@@ -119,7 +119,6 @@ export default function SearchPage() {
   }
 
   async function handleSearch() {
-    if (!keyword.trim() && searchMode === 'customer') return
     setSearching(true)
     setSelectedCustomer(null)
     setSchedules([])
@@ -133,10 +132,20 @@ export default function SearchPage() {
 
   async function searchCustomers() {
     const k = keyword.trim()
-    const isPhone = /^\d{2,}$/.test(k)
+    const isoStart = ymdToIso(startDate)
+    const isoEnd = ymdToIso(endDate)
+
     let query = supabase.from('customers').select('*')
-    if (isPhone) query = query.eq('phone_last4', k.slice(-4))
-    else query = query.ilike('name', `%${k}%`)
+
+    if (k) {
+      const isPhone = /^\d{2,}$/.test(k)
+      if (isPhone) query = query.eq('phone_last4', k.slice(-4))
+      else query = query.ilike('name', `%${k}%`)
+    }
+
+    if (isoStart) query = query.gte('created_at', isoStart)
+    if (isoEnd) query = query.lte('created_at', isoEnd + 'T23:59:59')
+
     const { data } = await query.order('created_at', { ascending: false }).limit(50)
     setResults(data || [])
   }
@@ -214,7 +223,7 @@ export default function SearchPage() {
     return { pending: '입금대기', paid: '입금완료', nodeposit: '면제', refunded: '환불완료' }[status] || status
   }
 
-  const showDateFilter = searchMode !== 'customer'
+  const showDateFilter = true // 모든 모드에서 날짜 필터 표시
 
   return (
     <MainLayout>

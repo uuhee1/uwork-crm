@@ -59,9 +59,10 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
 
   const menus = [
     { href: '/search', label: '조회' },
-    { href: '/customers/new', label: '고객등록' },
+    { href: '/customer-consult', label: '고객/상담' },
     { href: '/schedule', label: '스케줄' },
     { href: '/todo', label: '할일' },
+    { href: '/work-status', label: '작업현황' },
     { href: '/links', label: 'LINKS' },
   ]
 
