@@ -64,6 +64,7 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
     { href: '/sales', label: '판매' },
     { href: '/todo', label: '할일' },
     { href: '/work-status', label: '작업현황' },
+    { href: '/products', label: '상품' },
     { href: '/links', label: 'LINKS' },
   ]
 

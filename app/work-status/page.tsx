@@ -1,19 +1,445 @@
 'use client'
 
+import { Fragment, useEffect, useState } from 'react'
+import { supabase } from '@/lib/supabase'
 import MainLayout from '@/app/components/MainLayout'
+import { useRouter } from 'next/navigation'
+
+type WorkProcess = {
+  id: string
+  code: string
+  name: string
+  phase: string
+  status_options: string[]
+  sort_order: number
+}
+
+type SaleWork = {
+  sale_id: string
+  customer_name: string
+  customer_id: string
+  shoot_date: string | null
+  shoot_type: string | null
+  people_count: number | null
+  package_name: string | null
+  staff_name: string | null
+  sale_created_at: string
+  statuses: Record<string, { id: string; status: string; assigned_staff_name: string | null; memo: string | null }>
+}
+
+type StaffOption = { id: string; name: string }
+type PhaseTab = 'photo' | 'order' | 'done'
+
+const STATUS_LABEL: Record<string, string> = {
+  pending: '해야함',
+  done: '완료',
+  none: '없음',
+  none_file_only: '파일만',
+  compositing: '합성중',
+  composite_done: '합성완료',
+  waiting_reply: '답변기다림',
+  in_progress: '작업중',
+  pickup_ready: '방문수령',
+  shipping_ready: '택배준비',
+}
+
+const STATUS_COLOR: Record<string, string> = {
+  pending: 'bg-red-50 text-red-700 border-red-200',
+  done: 'bg-green-50 text-green-700 border-green-200',
+  none: 'bg-gray-50 text-gray-400 border-gray-200',
+  none_file_only: 'bg-gray-50 text-gray-400 border-gray-200',
+  compositing: 'bg-purple-50 text-purple-700 border-purple-200',
+  composite_done: 'bg-purple-50 text-purple-700 border-purple-200',
+  waiting_reply: 'bg-yellow-50 text-yellow-700 border-yellow-200',
+  in_progress: 'bg-blue-50 text-blue-700 border-blue-200',
+  pickup_ready: 'bg-blue-50 text-blue-700 border-blue-200',
+  shipping_ready: 'bg-orange-50 text-orange-700 border-orange-200',
+}
 
 export default function WorkStatusPage() {
+  const router = useRouter()
+  const [processes, setProcesses] = useState<WorkProcess[]>([])
+  const [saleWorks, setSaleWorks] = useState<SaleWork[]>([])
+  const [staffList, setStaffList] = useState<StaffOption[]>([])
+  const [currentStaffId, setCurrentStaffId] = useState('')
+  const [loading, setLoading] = useState(true)
+
+  // 필터
+  const [phaseTab, setPhaseTab] = useState<PhaseTab>('photo')
+  const [staffFilter, setStaffFilter] = useState<string>('all')
+  const [statusFilter, setStatusFilter] = useState<string>('all') // 'all', 'pending', 'waiting'
+  const [doneMonths, setDoneMonths] = useState(6)
+
+  useEffect(() => {
+    loadInit()
+  }, [])
+
+  useEffect(() => {
+    if (processes.length > 0) loadSaleWorks()
+  }, [phaseTab, staffFilter, statusFilter, doneMonths, processes])
+
+  async function loadInit() {
+    // 현재 직원
+    const { data: { user } } = await supabase.auth.getUser()
+    if (user) {
+      const { data: staff } = await supabase.from('staff').select('id').eq('auth_user_id', user.id).single()
+      if (staff) setCurrentStaffId(staff.id)
+    }
+
+    // 직원 목록
+    const { data: allStaff } = await supabase.from('staff').select('id, name').eq('is_active', true)
+    if (allStaff) setStaffList(allStaff)
+
+    // 공정 목록
+    const { data: procs } = await supabase
+      .from('work_processes')
+      .select('*')
+      .eq('is_active', true)
+      .order('sort_order')
+    if (procs) {
+      setProcesses(procs.map(p => ({
+        ...p,
+        status_options: typeof p.status_options === 'string' ? JSON.parse(p.status_options) : p.status_options,
+      })))
+    }
+
+    setLoading(false)
+  }
+
+  async function loadSaleWorks() {
+    setLoading(true)
+
+    // 1) sale_work_status 전체 조회 (join)
+    let query = supabase
+      .from('sale_work_status')
+      .select(`
+        id, sale_id, process_id, status, memo,
+        assigned_staff:assigned_staff_id ( name ),
+        work_processes!inner ( code, phase ),
+        sales!inner (
+          id, customer_id, schedule_id, package_name, staff_id, created_at, sale_status,
+          customers ( name ),
+          staff:staff_id ( name ),
+          schedules ( shoot_date, people_count, shoot_types:shoot_type_id ( label ) )
+        )
+      `)
+      .eq('sales.sale_status', 'confirmed')
+
+    const { data: rawData } = await query
+
+    if (!rawData) { setLoading(false); return }
+
+    // 2) sale_id별로 그룹핑
+    const saleMap = new Map<string, SaleWork>()
+
+    for (const row of rawData as any[]) {
+      const s = row.sales
+      const saleId = row.sale_id
+      const processCode = row.work_processes?.code
+
+      if (!saleMap.has(saleId)) {
+        saleMap.set(saleId, {
+          sale_id: saleId,
+          customer_name: s.customers?.name || '-',
+          customer_id: s.customer_id,
+          shoot_date: s.schedules?.shoot_date || null,
+          shoot_type: s.schedules?.shoot_types?.label || null,
+          people_count: s.schedules?.people_count || null,
+          package_name: s.package_name || null,
+          staff_name: s.staff?.name || null,
+          sale_created_at: s.created_at,
+          statuses: {},
+        })
+      }
+
+      const sw = saleMap.get(saleId)!
+      if (processCode) {
+        sw.statuses[processCode] = {
+          id: row.id,
+          status: row.status,
+          assigned_staff_name: row.assigned_staff?.name || null,
+          memo: row.memo || null,
+        }
+      }
+    }
+
+    let results = Array.from(saleMap.values())
+
+    // 3) 탭 필터
+    if (phaseTab === 'photo') {
+      // 사진작업 단계: photo phase에 pending/compositing/waiting 등이 있는 것
+      const photoCodes = processes.filter(p => p.phase === 'photo').map(p => p.code)
+      results = results.filter(sw => {
+        return photoCodes.some(code => {
+          const st = sw.statuses[code]?.status
+          return st && st !== 'done'
+        })
+      })
+    } else if (phaseTab === 'order') {
+      // 주문 단계: photo 다 done이고, order/delivery에 pending 있는 것
+      const photoCodes = processes.filter(p => p.phase === 'photo').map(p => p.code)
+      const otherCodes = processes.filter(p => p.phase === 'order' || p.phase === 'delivery').map(p => p.code)
+      results = results.filter(sw => {
+        const photoDone = photoCodes.every(code => {
+          const st = sw.statuses[code]?.status
+          return !st || st === 'done'
+        })
+        const hasRemaining = otherCodes.some(code => {
+          const st = sw.statuses[code]?.status
+          return st && !['done', 'none', 'none_file_only'].includes(st)
+        })
+        return photoDone && hasRemaining
+      })
+    } else if (phaseTab === 'done') {
+      // 완료: 모든 공정이 done/none
+      const cutoff = new Date()
+      cutoff.setMonth(cutoff.getMonth() - doneMonths)
+      results = results.filter(sw => {
+        const allDone = processes.every(p => {
+          const st = sw.statuses[p.code]?.status
+          return !st || ['done', 'none', 'none_file_only'].includes(st)
+        })
+        return allDone && new Date(sw.sale_created_at) >= cutoff
+      })
+    }
+
+    // 4) 담당자 필터
+    if (staffFilter !== 'all') {
+      results = results.filter(sw => {
+        return Object.values(sw.statuses).some(st =>
+          st.assigned_staff_name === staffList.find(s => s.id === staffFilter)?.name
+        ) || sw.staff_name === staffList.find(s => s.id === staffFilter)?.name
+      })
+    }
+
+    // 5) 상태 필터
+    if (statusFilter === 'pending') {
+      results = results.filter(sw =>
+        Object.values(sw.statuses).some(st => st.status === 'pending')
+      )
+    } else if (statusFilter === 'waiting') {
+      results = results.filter(sw =>
+        Object.values(sw.statuses).some(st => st.status === 'waiting_reply')
+      )
+    }
+
+    // 정렬: 촬영일 오래된 순
+    results.sort((a, b) => {
+      const da = a.shoot_date || a.sale_created_at
+      const db = b.shoot_date || b.sale_created_at
+      return da.localeCompare(db)
+    })
+
+    setSaleWorks(results)
+    setLoading(false)
+  }
+
+  // 공정 상태 변경
+  async function updateStatus(swsId: string, saleId: string, newStatus: string) {
+    await supabase.from('sale_work_status').update({ status: newStatus }).eq('id', swsId)
+    // 로컬 업데이트
+    setSaleWorks(prev => prev.map(sw => {
+      if (sw.sale_id !== saleId) return sw
+      const updated = { ...sw, statuses: { ...sw.statuses } }
+      for (const [code, st] of Object.entries(updated.statuses)) {
+        if (st.id === swsId) {
+          updated.statuses[code] = { ...st, status: newStatus }
+        }
+      }
+      return updated
+    }))
+  }
+
+  // 현재 탭에 표시할 공정 컬럼들
+  const visibleProcesses = phaseTab === 'done'
+    ? processes
+    : phaseTab === 'photo'
+      ? processes.filter(p => p.phase === 'photo')
+      : processes.filter(p => p.phase === 'order' || p.phase === 'delivery')
+
+  // D+일수 계산
+  function daysFromShoot(shootDate: string | null): string {
+    if (!shootDate) return '-'
+    const diff = Math.floor((Date.now() - new Date(shootDate).getTime()) / 86400000)
+    if (diff < 0) return `D${diff}`
+    return `D+${diff}`
+  }
+
+  if (loading && processes.length === 0) {
+    return (
+      <MainLayout>
+        <div className="min-h-screen flex items-center justify-center">
+          <p className="text-gray-400">로딩 중...</p>
+        </div>
+      </MainLayout>
+    )
+  }
+
   return (
     <MainLayout>
-      <div className="max-w-5xl mx-auto p-6">
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-8 text-center">
-          <h2 className="text-xl font-bold mb-2">작업현황</h2>
-          <p className="text-gray-400 text-sm">
-            판매 기능 구현 후 활성화됩니다.
-          </p>
-          <div className="mt-6 inline-block px-4 py-2 bg-gray-100 rounded-lg text-xs text-gray-500">
-            촬영 후처리 공정 관리 (jpg내보내기 → 원본전송 → 보정 → 실물상품 → 택배)
+      <div className="max-w-[1400px] mx-auto p-6">
+        <h2 className="text-xl font-bold mb-4">작업현황</h2>
+
+        {/* 탭 + 필터 */}
+        <div className="bg-white rounded-2xl border border-gray-200 p-4 mb-4">
+          <div className="flex flex-wrap gap-3 items-center">
+            {/* 탭 */}
+            <div className="flex gap-1 bg-gray-100 rounded-lg p-0.5">
+              {([
+                { key: 'photo' as PhaseTab, label: '사진작업', count: null },
+                { key: 'order' as PhaseTab, label: '주문/택배', count: null },
+                { key: 'done' as PhaseTab, label: '완료', count: null },
+              ]).map(t => (
+                <button
+                  key={t.key}
+                  onClick={() => setPhaseTab(t.key)}
+                  className={`px-4 py-2 text-sm rounded-md cursor-pointer transition ${
+                    phaseTab === t.key
+                      ? 'bg-white text-gray-900 shadow-sm font-medium'
+                      : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="w-px h-6 bg-gray-200" />
+
+            {/* 담당자 */}
+            <select
+              value={staffFilter}
+              onChange={e => setStaffFilter(e.target.value)}
+              className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm"
+            >
+              <option value="all">전체 담당</option>
+              {staffList.map(s => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+
+            {/* 상태 */}
+            <div className="flex gap-1">
+              {[
+                { value: 'all', label: '전체' },
+                { value: 'pending', label: '해야함' },
+                { value: 'waiting', label: '답변기다림' },
+              ].map(f => (
+                <button
+                  key={f.value}
+                  onClick={() => setStatusFilter(f.value)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer ${
+                    statusFilter === f.value
+                      ? 'bg-gray-900 text-white'
+                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  }`}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+
+            {/* 완료 탭일 때 기간 선택 */}
+            {phaseTab === 'done' && (
+              <>
+                <div className="w-px h-6 bg-gray-200" />
+                <select
+                  value={doneMonths}
+                  onChange={e => setDoneMonths(Number(e.target.value))}
+                  className="px-3 py-1.5 border border-gray-200 rounded-lg text-sm"
+                >
+                  <option value={3}>최근 3개월</option>
+                  <option value={6}>최근 6개월</option>
+                  <option value={12}>최근 1년</option>
+                </select>
+              </>
+            )}
+
+            <div className="ml-auto text-sm text-gray-400">
+              {loading ? '로딩 중...' : `${saleWorks.length}건`}
+            </div>
           </div>
+        </div>
+
+        {/* 테이블 */}
+        <div className="bg-white rounded-2xl border border-gray-200 overflow-x-auto">
+          <table className="w-full text-sm whitespace-nowrap">
+            <thead>
+              <tr className="bg-gray-50 border-b border-gray-200">
+                <th className="text-left px-3 py-2.5 font-medium text-gray-600 sticky left-0 bg-gray-50 z-10 min-w-[60px]">촬영일</th>
+                <th className="text-left px-3 py-2.5 font-medium text-gray-600 min-w-[80px]">촬영/인원</th>
+                <th className="text-left px-3 py-2.5 font-medium text-gray-600 min-w-[70px]">고객</th>
+                <th className="text-left px-3 py-2.5 font-medium text-gray-600 min-w-[80px]">상품</th>
+                <th className="text-center px-3 py-2.5 font-medium text-gray-600 min-w-[50px]">D+</th>
+                <th className="text-left px-3 py-2.5 font-medium text-gray-600 min-w-[40px]">담당</th>
+                {visibleProcesses.map(p => (
+                  <th key={p.code} className="text-center px-2 py-2.5 font-medium text-gray-600 min-w-[90px]">
+                    {p.name}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {saleWorks.length === 0 ? (
+                <tr>
+                  <td colSpan={6 + visibleProcesses.length} className="text-center py-12 text-gray-400 text-sm">
+                    {phaseTab === 'done' ? '해당 기간에 완료된 건이 없습니다' : '해당 조건의 작업이 없습니다'}
+                  </td>
+                </tr>
+              ) : (
+                saleWorks.map(sw => (
+                  <tr key={sw.sale_id} className="border-b border-gray-100 hover:bg-gray-50">
+                    <td className="px-3 py-2 sticky left-0 bg-white z-10 font-mono text-xs">
+                      {sw.shoot_date ? sw.shoot_date.slice(2).replace(/-/g, '/') : '-'}
+                    </td>
+                    <td className="px-3 py-2 text-xs">
+                      {sw.shoot_type || '-'}{sw.people_count ? ` ${sw.people_count}인` : ''}
+                    </td>
+                    <td className="px-3 py-2">
+                      <button
+                        onClick={() => router.push(`/search?customer_id=${sw.customer_id}`)}
+                        className="text-blue-600 hover:underline cursor-pointer font-medium text-xs"
+                      >
+                        {sw.customer_name}
+                      </button>
+                    </td>
+                    <td className="px-3 py-2 text-xs text-gray-600 truncate max-w-[120px]">
+                      {sw.package_name || '-'}
+                    </td>
+                    <td className="px-3 py-2 text-center text-xs text-gray-500">
+                      {daysFromShoot(sw.shoot_date)}
+                    </td>
+                    <td className="px-3 py-2 text-xs text-gray-600">
+                      {sw.staff_name || '-'}
+                    </td>
+                    {visibleProcesses.map(p => {
+                      const st = sw.statuses[p.code]
+                      if (!st) return <td key={p.code} className="px-2 py-2 text-center text-xs text-gray-300">-</td>
+
+                      const colorClass = STATUS_COLOR[st.status] || 'bg-gray-50 text-gray-500 border-gray-200'
+
+                      return (
+                        <td key={p.code} className="px-2 py-2 text-center">
+                          <select
+                            value={st.status}
+                            onChange={e => updateStatus(st.id, sw.sale_id, e.target.value)}
+                            className={`text-[11px] font-medium px-2 py-1 rounded-md border cursor-pointer appearance-none text-center ${colorClass}`}
+                            style={{ minWidth: '78px' }}
+                          >
+                            {(p.status_options || []).map((opt: string) => (
+                              <option key={opt} value={opt}>
+                                {STATUS_LABEL[opt] || opt}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                      )
+                    })}
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
     </MainLayout>
