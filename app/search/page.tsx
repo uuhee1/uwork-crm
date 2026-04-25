@@ -14,6 +14,9 @@ type Customer = {
   group_name: string
   memo: string | null
   created_at: string
+  last_shoot_date?: string | null
+  total_schedules?: number
+  total_sales?: number
 }
 
 type ScheduleRow = {
@@ -135,7 +138,7 @@ export default function SearchPage() {
     const isoStart = ymdToIso(startDate)
     const isoEnd = ymdToIso(endDate)
 
-    let query = supabase.from('customers').select('*')
+    let query = supabase.from('customers_with_stats').select('*')
 
     if (k) {
       const isPhone = /^\d{2,}$/.test(k)
@@ -223,7 +226,7 @@ export default function SearchPage() {
     return { pending: '입금대기', paid: '입금완료', nodeposit: '면제', refunded: '환불완료' }[status] || status
   }
 
-  const showDateFilter = true // 모든 모드에서 날짜 필터 표시
+  const showDateFilter = true
 
   return (
     <MainLayout>
@@ -320,30 +323,48 @@ export default function SearchPage() {
             {results.length === 0 && !searching && (
               <div className="p-4 text-center text-gray-400 text-sm">검색 결과가 없습니다</div>
             )}
-            {results.map(c => (
-              <div
-                key={c.id}
-                onClick={() => selectCustomer(c)}
-                className={`px-4 py-3 border-b border-gray-100 cursor-pointer transition ${
-                  selectedCustomer?.id === c.id ? 'bg-gray-900 text-white' : 'hover:bg-gray-50'
-                }`}
-              >
-                <div className="flex justify-between items-center">
-                  <span className="font-medium text-sm">{c.name}</span>
-                  <span className={`text-xs ${selectedCustomer?.id === c.id ? 'text-white/60' : 'text-gray-400'}`}>{c.group_name}</span>
+            {results.map(c => {
+              const selected = selectedCustomer?.id === c.id
+              const createdDate = c.created_at ? new Date(c.created_at) : null
+              const createdStr = createdDate ? `${String(createdDate.getFullYear()).slice(2)}.${String(createdDate.getMonth()+1).padStart(2,'0')}.${String(createdDate.getDate()).padStart(2,'0')}` : ''
+              const lastShoot = c.last_shoot_date ? `${String(new Date(c.last_shoot_date).getFullYear()).slice(2)}.${String(new Date(c.last_shoot_date).getMonth()+1).padStart(2,'0')}.${String(new Date(c.last_shoot_date).getDate()).padStart(2,'0')}` : null
+              return (
+                <div
+                  key={c.id}
+                  onClick={() => selectCustomer(c)}
+                  className={`px-4 py-3 border-b border-gray-100 cursor-pointer transition ${
+                    selected ? 'bg-gray-900 text-white' : 'hover:bg-gray-50'
+                  }`}
+                >
+                  <div className="flex justify-between items-center">
+                    <span className="font-medium text-sm">{c.name}</span>
+                    <span className={`text-xs ${selected ? 'text-white/60' : 'text-gray-400'}`}>{c.group_name}</span>
+                  </div>
+                  <div className={`text-xs mt-0.5 ${selected ? 'text-white/60' : 'text-gray-400'}`}>
+                    {c.phone || '번호없음'} {c.phone_last4 ? `(${c.phone_last4})` : ''}
+                  </div>
+                  <div className={`text-xs mt-0.5 flex gap-3 ${selected ? 'text-white/50' : 'text-gray-400'}`}>
+                    <span>등록 {createdStr}</span>
+                    {lastShoot && <span>최근촬영 {lastShoot}</span>}
+                    {(c.total_schedules || 0) > 0 && <span>촬영 {c.total_schedules}회</span>}
+                  </div>
                 </div>
-                <div className={`text-xs mt-0.5 ${selectedCustomer?.id === c.id ? 'text-white/60' : 'text-gray-400'}`}>
-                  {c.phone || '번호없음'} {c.phone_last4 ? `(${c.phone_last4})` : ''}
-                </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
 
           {/* 하단 버튼 */}
           <div className="p-3 border-t border-gray-200 flex gap-2">
-            <button onClick={() => window.location.href = '/customers/new'} className="flex-1 py-2 text-center bg-gray-900 text-white rounded-lg text-xs font-medium hover:bg-gray-800 cursor-pointer">새고객등록</button>
-            <button onClick={() => { if (!selectedCustomer) alert('고객을 먼저 선택하세요.') }} className="flex-1 py-2 bg-white border border-gray-300 rounded-lg text-xs font-medium hover:bg-gray-50 cursor-pointer">스케줄등록</button>
-            <button disabled className="flex-1 py-2 bg-gray-100 text-gray-300 rounded-lg text-xs font-medium cursor-not-allowed">판매등록</button>
+            <button onClick={() => window.location.href = '/customer-consult'} className="flex-1 py-2 text-center bg-gray-900 text-white rounded-lg text-xs font-medium hover:bg-gray-800 cursor-pointer">+ 상담/할일</button>
+            <button
+              onClick={() => {
+                if (!selectedCustomer) { alert('고객을 먼저 선택하세요.'); return }
+                window.location.href = `/sales/new?customer_id=${selectedCustomer.id}`
+              }}
+              className="flex-1 py-2 bg-purple-600 text-white rounded-lg text-xs font-medium hover:bg-purple-700 cursor-pointer"
+            >
+              + 판매
+            </button>
             <button disabled className="flex-1 py-2 bg-gray-100 text-gray-300 rounded-lg text-xs font-medium cursor-not-allowed">알림톡</button>
           </div>
         </div>

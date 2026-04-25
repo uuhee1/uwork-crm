@@ -1,6 +1,8 @@
 'use client'
 
 import { useRouter } from 'next/navigation'
+import { useEffect, useState } from 'react'
+import { supabase } from '@/lib/supabase'
 
 type CalendarEvent = {
   id: string
@@ -19,6 +21,15 @@ type CalendarEvent = {
     memo: string | null
     staffName: string | null
   }
+}
+
+type SaleItem = {
+  id: string
+  package_name: string | null
+  total_amount: number
+  sale_status: string
+  payment_status: string
+  created_at: string
 }
 
 type Props = {

@@ -220,9 +220,14 @@ function getTimelineItems(): TimelineItem[] {
           <button onClick={() => setViewMode('schedule')} className={`px-4 py-2 rounded-lg text-sm font-medium cursor-pointer ${viewMode === 'schedule' ? 'bg-gray-900 text-white' : 'bg-white border border-gray-300 hover:bg-gray-50'}`}>스케줄별</button>
         </div>
         <div className="flex gap-2">
-          <button onClick={() => openConsultForm('consultation')} className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 cursor-pointer">상담등록</button>
-          <button onClick={() => openConsultForm('todo')} className="px-3 py-1.5 text-xs bg-orange-500 text-white rounded-lg hover:bg-orange-600 cursor-pointer">할일등록</button>
+          <button onClick={() => openConsultForm('consultation')} className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded-lg hover:bg-blue-700 cursor-pointer">+ 상담/할일</button>
           <button onClick={openScheduleForm} className="px-3 py-1.5 text-xs bg-green-600 text-white rounded-lg hover:bg-green-700 cursor-pointer">+ 스케줄</button>
+          <button
+            onClick={() => window.location.href = `/sales/new?customer_id=${customer.id}`}
+            className="px-3 py-1.5 text-xs bg-purple-600 text-white rounded-lg hover:bg-purple-700 cursor-pointer"
+          >
+            + 판매
+          </button>
         </div>
       </div>
 
