@@ -33,55 +33,35 @@ type CalendarEvent = {
 }
 
 const COLOR_MAP: Record<string, string> = {
-  BANANA: '#F6BF26',
-  TOMATO: '#D50000',
-  SAGE: '#33B679',
-  PEACOCK: '#039BE5',
-  LAVENDER: '#7986CB',
-  GRAPHITE: '#616161',
-  TANGERINE: '#F4511E',
-  FLAMINGO: '#E67C73',
+  BANANA: '#F6BF26', TOMATO: '#D50000', SAGE: '#33B679', PEACOCK: '#039BE5',
+  LAVENDER: '#7986CB', GRAPHITE: '#616161', TANGERINE: '#F4511E', FLAMINGO: '#E67C73',
 }
 
 const STATUS_LABEL: Record<string, string> = {
-  wait: '확정대기',
-  confirmed: '확정',
-  canceled: '취소',
-  noshow: '노쇼',
+  wait: '확정대기', confirmed: '확정', canceled: '취소', noshow: '노쇼',
 }
 
 const DEPOSIT_LABEL: Record<string, string> = {
-  pending: '입금대기',
-  paid: '입금완료',
-  nodeposit: '면제',
-  refunded: '환불완료',
+  pending: '입금대기', paid: '입금완료', nodeposit: '면제', refunded: '환불완료',
 }
 
 export default function SchedulePage() {
-  const [events, setEvents] = useState<CalendarEvent[]>([])
+  const [allEvents, setAllEvents] = useState<CalendarEvent[]>([])
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null)
   const [showModal, setShowModal] = useState(false)
   const [showBooking, setShowBooking] = useState(false)
   const [bookingDate, setBookingDate] = useState('')
   const [bookingTime, setBookingTime] = useState<string | undefined>(undefined)
+  const [hideCanceled, setHideCanceled] = useState(true)
   const calendarRef = useRef<FullCalendar>(null)
-
-  // 더블클릭 감지용
   const lastClickRef = useRef<{ time: number; dateStr: string }>({ time: 0, dateStr: '' })
 
-  useEffect(() => {
-    loadSchedules()
-  }, [])
+  useEffect(() => { loadSchedules() }, [])
 
   async function loadSchedules() {
     const { data, error } = await supabase
       .from('schedules')
-      .select(`
-        *,
-        customers ( name ),
-        shoot_types ( label, cal_color ),
-        staff ( name )
-      `)
+      .select('*, customers ( name ), shoot_types ( label, cal_color ), staff ( name )')
       .order('shoot_date', { ascending: true })
 
     if (error || !data) return
@@ -90,7 +70,6 @@ export default function SchedulePage() {
       const color = COLOR_MAP[s.shoot_types?.cal_color || ''] || '#4285F4'
       const custName = s.customers?.name || '-'
       const typeLabel = s.shoot_types?.label || '-'
-
       return {
         id: s.id,
         title: `[${typeLabel}] ${custName} ${s.people_count}인`,
@@ -99,107 +78,68 @@ export default function SchedulePage() {
         backgroundColor: s.status === 'canceled' || s.status === 'noshow' ? '#9CA3AF' : color,
         borderColor: s.status === 'canceled' || s.status === 'noshow' ? '#9CA3AF' : color,
         extendedProps: {
-          scheduleId: s.id,
-          customerId: s.customer_id,
-          customerName: custName,
-          shootType: typeLabel,
-          peopleCount: s.people_count,
-          status: s.status,
-          depositStatus: s.deposit_status,
-          memo: s.memo,
-          staffName: s.staff?.name || null,
+          scheduleId: s.id, customerId: s.customer_id, customerName: custName,
+          shootType: typeLabel, peopleCount: s.people_count, status: s.status,
+          depositStatus: s.deposit_status, memo: s.memo, staffName: s.staff?.name || null,
         },
       }
     })
-
-    setEvents(mapped)
+    setAllEvents(mapped)
   }
 
+  // 취소/노쇼 필터링
+  const events = hideCanceled
+    ? allEvents.filter(e => e.extendedProps.status !== 'canceled' && e.extendedProps.status !== 'noshow')
+    : allEvents
+
   function handleEventClick(info: EventClickArg) {
-    const ev = events.find(e => e.id === info.event.id)
-    if (ev) {
-      setSelectedEvent(ev)
-      setShowModal(true)
-    }
+    const ev = allEvents.find(e => e.id === info.event.id)
+    if (ev) { setSelectedEvent(ev); setShowModal(true) }
   }
 
   function handleDateClick(info: DateClickArg) {
     const now = Date.now()
     const last = lastClickRef.current
-
     if (last.dateStr === info.dateStr && now - last.time < 500) {
-      // 더블클릭 감지
       const dateStr = info.dateStr
-      let date = dateStr
-      let time: string | undefined = undefined
-
-      if (dateStr.includes('T')) {
-        // timeGrid 뷰에서 클릭 (2025-04-19T10:00:00+09:00)
-        date = dateStr.slice(0, 10)
-        time = dateStr.slice(11, 16)
-      }
-
-      setBookingDate(date)
-      setBookingTime(time)
-      setShowBooking(true)
+      let date = dateStr; let time: string | undefined = undefined
+      if (dateStr.includes('T')) { date = dateStr.slice(0, 10); time = dateStr.slice(11, 16) }
+      setBookingDate(date); setBookingTime(time); setShowBooking(true)
       lastClickRef.current = { time: 0, dateStr: '' }
     } else {
       lastClickRef.current = { time: now, dateStr: info.dateStr }
     }
   }
 
-  function handleBookingSaved() {
-    setShowBooking(false)
-    loadSchedules()
-  }
+  function handleBookingSaved() { setShowBooking(false); loadSchedules() }
 
   return (
     <MainLayout>
       <div className="p-4 bg-white min-h-[calc(100vh-52px)]">
+        {/* 취소 숨기기 토글 */}
+        <div className="flex justify-end mb-2">
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={hideCanceled}
+              onChange={e => setHideCanceled(e.target.checked)}
+              className="rounded"
+            />
+            <span className="text-xs text-gray-500">취소/노쇼 숨기기</span>
+          </label>
+        </div>
+
         <style>{`
-          .fc {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
-            font-size: 13px;
-          }
-          .fc .fc-toolbar-title {
-            font-size: 1.2rem;
-            font-weight: 700;
-          }
-          .fc .fc-button {
-            font-size: 0.8rem;
-            padding: 4px 12px;
-            border-radius: 8px;
-          }
-          .fc .fc-button-primary {
-            background-color: #111827;
-            border-color: #111827;
-          }
-          .fc .fc-button-primary:not(:disabled).fc-button-active,
-          .fc .fc-button-primary:not(:disabled):active {
-            background-color: #374151;
-            border-color: #374151;
-          }
-          .fc .fc-event {
-            border-radius: 4px;
-            padding: 1px 4px;
-            font-size: 0.75rem;
-            cursor: pointer;
-          }
-          .fc .fc-daygrid-event {
-            white-space: nowrap;
-            overflow: hidden;
-          }
-          .fc td, .fc th {
-            border-color: #E5E7EB;
-          }
-          .fc .fc-day-today {
-            background-color: #F0F9FF !important;
-          }
-          .fc .fc-col-header-cell {
-            padding: 8px 0;
-            font-weight: 600;
-            color: #374151;
-          }
+          .fc { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; font-size: 13px; }
+          .fc .fc-toolbar-title { font-size: 1.2rem; font-weight: 700; }
+          .fc .fc-button { font-size: 0.8rem; padding: 4px 12px; border-radius: 8px; }
+          .fc .fc-button-primary { background-color: #111827; border-color: #111827; }
+          .fc .fc-button-primary:not(:disabled).fc-button-active, .fc .fc-button-primary:not(:disabled):active { background-color: #374151; border-color: #374151; }
+          .fc .fc-event { border-radius: 4px; padding: 1px 4px; font-size: 0.75rem; cursor: pointer; }
+          .fc .fc-daygrid-event { white-space: nowrap; overflow: hidden; }
+          .fc td, .fc th { border-color: #E5E7EB; }
+          .fc .fc-day-today { background-color: #F0F9FF !important; }
+          .fc .fc-col-header-cell { padding: 8px 0; font-weight: 600; color: #374151; }
         `}</style>
 
         <FullCalendar
@@ -207,18 +147,8 @@ export default function SchedulePage() {
           plugins={[dayGridPlugin, timeGridPlugin, listPlugin, interactionPlugin]}
           initialView="dayGridMonth"
           locale="ko"
-          headerToolbar={{
-            left: 'prev,next today',
-            center: 'title',
-            right: 'listWeek,dayGridMonth,timeGridWeek,timeGridDay',
-          }}
-          buttonText={{
-            today: '오늘',
-            month: '월',
-            week: '주',
-            day: '일',
-            list: '목록',
-          }}
+          headerToolbar={{ left: 'prev,next today', center: 'title', right: 'listWeek,dayGridMonth,timeGridWeek,timeGridDay' }}
+          buttonText={{ today: '오늘', month: '월', week: '주', day: '일', list: '목록' }}
           events={events}
           eventClick={handleEventClick}
           dateClick={handleDateClick}
@@ -228,16 +158,8 @@ export default function SchedulePage() {
           slotMinTime="08:00:00"
           slotMaxTime="21:00:00"
           allDaySlot={false}
-          slotLabelFormat={{
-            hour: '2-digit',
-            minute: '2-digit',
-            hour12: false,
-          }}
-          eventTimeFormat={{
-            hour: '2-digit',
-            minute: '2-digit',
-            hour12: false,
-          }}
+          slotLabelFormat={{ hour: '2-digit', minute: '2-digit', hour12: false }}
+          eventTimeFormat={{ hour: '2-digit', minute: '2-digit', hour12: false }}
         />
 
         {showModal && selectedEvent && (
@@ -246,6 +168,7 @@ export default function SchedulePage() {
             statusLabel={STATUS_LABEL}
             depositLabel={DEPOSIT_LABEL}
             onClose={() => setShowModal(false)}
+            onUpdated={loadSchedules}
           />
         )}
 

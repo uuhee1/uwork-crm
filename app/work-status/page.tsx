@@ -19,7 +19,8 @@ type SaleWork = {
   customer_name: string
   customer_id: string
   shoot_date: string | null
-  shoot_type: string | null
+  shoot_type_code: string | null
+  shoot_type_label: string | null
   people_count: number | null
   package_name: string | null
   staff_name: string | null
@@ -56,6 +57,9 @@ const STATUS_COLOR: Record<string, string> = {
   shipping_ready: 'bg-orange-50 text-orange-700 border-orange-200',
 }
 
+// 인원 표시 안 하는 촬영 종류
+const NO_PEOPLE_SUFFIX = ['wedding', 'profile']
+
 export default function WorkStatusPage() {
   const router = useRouter()
   const [processes, setProcesses] = useState<WorkProcess[]>([])
@@ -63,11 +67,12 @@ export default function WorkStatusPage() {
   const [staffList, setStaffList] = useState<StaffOption[]>([])
   const [currentStaffId, setCurrentStaffId] = useState('')
   const [loading, setLoading] = useState(true)
+  const [copyFeedback, setCopyFeedback] = useState<string | null>(null)
 
   // 필터
   const [phaseTab, setPhaseTab] = useState<PhaseTab>('photo')
   const [staffFilter, setStaffFilter] = useState<string>('all')
-  const [statusFilter, setStatusFilter] = useState<string>('all') // 'all', 'pending', 'waiting'
+  const [statusFilter, setStatusFilter] = useState<string>('all')
   const [doneMonths, setDoneMonths] = useState(6)
 
   useEffect(() => {
@@ -79,18 +84,15 @@ export default function WorkStatusPage() {
   }, [phaseTab, staffFilter, statusFilter, doneMonths, processes])
 
   async function loadInit() {
-    // 현재 직원
     const { data: { user } } = await supabase.auth.getUser()
     if (user) {
       const { data: staff } = await supabase.from('staff').select('id').eq('auth_user_id', user.id).single()
       if (staff) setCurrentStaffId(staff.id)
     }
 
-    // 직원 목록
     const { data: allStaff } = await supabase.from('staff').select('id, name').eq('is_active', true)
     if (allStaff) setStaffList(allStaff)
 
-    // 공정 목록
     const { data: procs } = await supabase
       .from('work_processes')
       .select('*')
@@ -109,8 +111,7 @@ export default function WorkStatusPage() {
   async function loadSaleWorks() {
     setLoading(true)
 
-    // 1) sale_work_status 전체 조회 (join)
-    let query = supabase
+    const { data: rawData } = await supabase
       .from('sale_work_status')
       .select(`
         id, sale_id, process_id, status, memo,
@@ -120,20 +121,17 @@ export default function WorkStatusPage() {
           id, customer_id, schedule_id, package_name, staff_id, created_at, sale_status,
           customers ( name ),
           staff:staff_id ( name ),
-          schedules ( shoot_date, people_count, shoot_types:shoot_type_id ( label ) )
+          schedules ( shoot_date, people_count, shoot_types:shoot_type_id ( label, code ) )
         )
       `)
-      .eq('sales.sale_status', 'confirmed')
-
-    const { data: rawData } = await query
 
     if (!rawData) { setLoading(false); return }
 
-    // 2) sale_id별로 그룹핑
     const saleMap = new Map<string, SaleWork>()
 
     for (const row of rawData as any[]) {
       const s = row.sales
+      if (s.sale_status !== 'confirmed') continue
       const saleId = row.sale_id
       const processCode = row.work_processes?.code
 
@@ -143,7 +141,8 @@ export default function WorkStatusPage() {
           customer_name: s.customers?.name || '-',
           customer_id: s.customer_id,
           shoot_date: s.schedules?.shoot_date || null,
-          shoot_type: s.schedules?.shoot_types?.label || null,
+          shoot_type_code: s.schedules?.shoot_types?.code || null,
+          shoot_type_label: s.schedules?.shoot_types?.label || null,
           people_count: s.schedules?.people_count || null,
           package_name: s.package_name || null,
           staff_name: s.staff?.name || null,
@@ -165,54 +164,44 @@ export default function WorkStatusPage() {
 
     let results = Array.from(saleMap.values())
 
-    // 3) 탭 필터
+    const DONE_STATUSES = ['done', 'none', 'none_file_only']
+
     if (phaseTab === 'photo') {
-      // 사진작업 단계: photo phase에 pending/compositing/waiting 등이 있는 것
       const photoCodes = processes.filter(p => p.phase === 'photo').map(p => p.code)
-      results = results.filter(sw => {
-        return photoCodes.some(code => {
+      results = results.filter(sw =>
+        photoCodes.some(code => {
           const st = sw.statuses[code]?.status
-          return st && st !== 'done'
+          return st && !DONE_STATUSES.includes(st)
         })
-      })
+      )
     } else if (phaseTab === 'order') {
-      // 주문 단계: photo 다 done이고, order/delivery에 pending 있는 것
-      const photoCodes = processes.filter(p => p.phase === 'photo').map(p => p.code)
-      const otherCodes = processes.filter(p => p.phase === 'order' || p.phase === 'delivery').map(p => p.code)
-      results = results.filter(sw => {
-        const photoDone = photoCodes.every(code => {
+      const orderCodes = processes.filter(p => p.phase === 'order' || p.phase === 'delivery').map(p => p.code)
+      results = results.filter(sw =>
+        orderCodes.some(code => {
           const st = sw.statuses[code]?.status
-          return !st || st === 'done'
+          return st && !DONE_STATUSES.includes(st)
         })
-        const hasRemaining = otherCodes.some(code => {
-          const st = sw.statuses[code]?.status
-          return st && !['done', 'none', 'none_file_only'].includes(st)
-        })
-        return photoDone && hasRemaining
-      })
+      )
     } else if (phaseTab === 'done') {
-      // 완료: 모든 공정이 done/none
       const cutoff = new Date()
       cutoff.setMonth(cutoff.getMonth() - doneMonths)
       results = results.filter(sw => {
         const allDone = processes.every(p => {
           const st = sw.statuses[p.code]?.status
-          return !st || ['done', 'none', 'none_file_only'].includes(st)
+          return !st || DONE_STATUSES.includes(st)
         })
         return allDone && new Date(sw.sale_created_at) >= cutoff
       })
     }
 
-    // 4) 담당자 필터
     if (staffFilter !== 'all') {
-      results = results.filter(sw => {
-        return Object.values(sw.statuses).some(st =>
+      results = results.filter(sw =>
+        Object.values(sw.statuses).some(st =>
           st.assigned_staff_name === staffList.find(s => s.id === staffFilter)?.name
         ) || sw.staff_name === staffList.find(s => s.id === staffFilter)?.name
-      })
+      )
     }
 
-    // 5) 상태 필터
     if (statusFilter === 'pending') {
       results = results.filter(sw =>
         Object.values(sw.statuses).some(st => st.status === 'pending')
@@ -223,7 +212,6 @@ export default function WorkStatusPage() {
       )
     }
 
-    // 정렬: 촬영일 오래된 순
     results.sort((a, b) => {
       const da = a.shoot_date || a.sale_created_at
       const db = b.shoot_date || b.sale_created_at
@@ -234,10 +222,8 @@ export default function WorkStatusPage() {
     setLoading(false)
   }
 
-  // 공정 상태 변경
   async function updateStatus(swsId: string, saleId: string, newStatus: string) {
     await supabase.from('sale_work_status').update({ status: newStatus }).eq('id', swsId)
-    // 로컬 업데이트
     setSaleWorks(prev => prev.map(sw => {
       if (sw.sale_id !== saleId) return sw
       const updated = { ...sw, statuses: { ...sw.statuses } }
@@ -250,14 +236,111 @@ export default function WorkStatusPage() {
     }))
   }
 
-  // 현재 탭에 표시할 공정 컬럼들
+  // ─── 경로 복사 ───────────────────────────────
+  function buildFolderName(sw: SaleWork): string {
+    if (!sw.shoot_date) return ''
+    const mm = sw.shoot_date.slice(5, 7)
+    const dd = sw.shoot_date.slice(8, 10)
+    const label = sw.shoot_type_label || ''
+    const code = sw.shoot_type_code || ''
+    const name = sw.customer_name || ''
+
+    // 인원 표시
+    let peopleSuffix = ''
+    if (!NO_PEOPLE_SUFFIX.includes(code)) {
+      peopleSuffix = `${sw.people_count || 1}인`
+    }
+
+    return `${mm}${dd} ${label}${peopleSuffix}(${name})`
+  }
+
+  function buildBasePath(sw: SaleWork): string {
+    if (!sw.shoot_date) return ''
+    const yyyy = sw.shoot_date.slice(0, 4)
+    const m = parseInt(sw.shoot_date.slice(5, 7), 10)
+    return `\\\\192.168.0.6\\${yyyy}_uuhee\\${yyyy}년 ${m}월(uuhee)`
+  }
+
+  function getWorkPhase(sw: SaleWork): 'photo' | 'ordering' | 'order_done' | 'ship_done' | 'id_photo' | 'id_done' {
+    const isIdPhoto = sw.shoot_type_code === 'id_photo'
+    const DONE = ['done', 'none', 'none_file_only']
+
+    if (isIdPhoto) {
+      // 증명: 원본전송이 done이면 완료
+      const origSend = sw.statuses['original_send']?.status
+      if (origSend && DONE.includes(origSend)) return 'id_done'
+      return 'id_photo'
+    }
+
+    // 일반: 현재 단계 판별
+    const photoCodes = processes.filter(p => p.phase === 'photo').map(p => p.code)
+    const orderCodes = processes.filter(p => p.phase === 'order').map(p => p.code)
+    const packingStatus = sw.statuses['packing']?.status
+
+    const photoDone = photoCodes.every(c => {
+      const st = sw.statuses[c]?.status
+      return !st || DONE.includes(st)
+    })
+    const orderDone = orderCodes.every(c => {
+      const st = sw.statuses[c]?.status
+      return !st || DONE.includes(st)
+    })
+    const packingDone = !packingStatus || DONE.includes(packingStatus)
+
+    if (!photoDone) return 'photo'
+    if (!orderDone) return 'ordering'
+    if (!packingDone) return 'order_done'
+    return 'ship_done'
+  }
+
+  function buildFullPath(sw: SaleWork): string {
+    const base = buildBasePath(sw)
+    const folder = buildFolderName(sw)
+    const phase = getWorkPhase(sw)
+
+    switch (phase) {
+      case 'id_photo':
+        return `${base}\\${folder}`
+      case 'id_done':
+        return `${base}\\[증명완료]\\${folder}`
+      case 'photo':
+        return `${base}\\${folder}`
+      case 'ordering':
+        return `${base}\\[주문할것]\\${folder}`
+      case 'order_done':
+        return `${base}\\[주문할것]\\[주문완료]\\${folder}`
+      case 'ship_done':
+        return `${base}\\[주문할것]\\[주문완료]\\[포장및발송완료]\\${folder}`
+      default:
+        return `${base}\\${folder}`
+    }
+  }
+
+  async function copyPath(sw: SaleWork) {
+    const path = buildFullPath(sw)
+    try {
+      await navigator.clipboard.writeText(path)
+      setCopyFeedback(sw.sale_id)
+      setTimeout(() => setCopyFeedback(null), 1500)
+    } catch {
+      // fallback
+      const ta = document.createElement('textarea')
+      ta.value = path
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+      setCopyFeedback(sw.sale_id)
+      setTimeout(() => setCopyFeedback(null), 1500)
+    }
+  }
+
   const visibleProcesses = phaseTab === 'done'
     ? processes
     : phaseTab === 'photo'
       ? processes.filter(p => p.phase === 'photo')
       : processes.filter(p => p.phase === 'order' || p.phase === 'delivery')
 
-  // D+일수 계산
   function daysFromShoot(shootDate: string | null): string {
     if (!shootDate) return '-'
     const diff = Math.floor((Date.now() - new Date(shootDate).getTime()) / 86400000)
@@ -283,12 +366,11 @@ export default function WorkStatusPage() {
         {/* 탭 + 필터 */}
         <div className="bg-white rounded-2xl border border-gray-200 p-4 mb-4">
           <div className="flex flex-wrap gap-3 items-center">
-            {/* 탭 */}
             <div className="flex gap-1 bg-gray-100 rounded-lg p-0.5">
               {([
-                { key: 'photo' as PhaseTab, label: '사진작업', count: null },
-                { key: 'order' as PhaseTab, label: '주문/택배', count: null },
-                { key: 'done' as PhaseTab, label: '완료', count: null },
+                { key: 'photo' as PhaseTab, label: '사진작업' },
+                { key: 'order' as PhaseTab, label: '주문/택배' },
+                { key: 'done' as PhaseTab, label: '완료' },
               ]).map(t => (
                 <button
                   key={t.key}
@@ -306,7 +388,6 @@ export default function WorkStatusPage() {
 
             <div className="w-px h-6 bg-gray-200" />
 
-            {/* 담당자 */}
             <select
               value={staffFilter}
               onChange={e => setStaffFilter(e.target.value)}
@@ -318,7 +399,6 @@ export default function WorkStatusPage() {
               ))}
             </select>
 
-            {/* 상태 */}
             <div className="flex gap-1">
               {[
                 { value: 'all', label: '전체' },
@@ -339,7 +419,6 @@ export default function WorkStatusPage() {
               ))}
             </div>
 
-            {/* 완료 탭일 때 기간 선택 */}
             {phaseTab === 'done' && (
               <>
                 <div className="w-px h-6 bg-gray-200" />
@@ -366,6 +445,7 @@ export default function WorkStatusPage() {
           <table className="w-full text-sm whitespace-nowrap">
             <thead>
               <tr className="bg-gray-50 border-b border-gray-200">
+                <th className="text-center px-2 py-2.5 font-medium text-gray-600 w-10">📋</th>
                 <th className="text-left px-3 py-2.5 font-medium text-gray-600 sticky left-0 bg-gray-50 z-10 min-w-[60px]">촬영일</th>
                 <th className="text-left px-3 py-2.5 font-medium text-gray-600 min-w-[80px]">촬영/인원</th>
                 <th className="text-left px-3 py-2.5 font-medium text-gray-600 min-w-[70px]">고객</th>
@@ -382,18 +462,28 @@ export default function WorkStatusPage() {
             <tbody>
               {saleWorks.length === 0 ? (
                 <tr>
-                  <td colSpan={6 + visibleProcesses.length} className="text-center py-12 text-gray-400 text-sm">
+                  <td colSpan={7 + visibleProcesses.length} className="text-center py-12 text-gray-400 text-sm">
                     {phaseTab === 'done' ? '해당 기간에 완료된 건이 없습니다' : '해당 조건의 작업이 없습니다'}
                   </td>
                 </tr>
               ) : (
                 saleWorks.map(sw => (
                   <tr key={sw.sale_id} className="border-b border-gray-100 hover:bg-gray-50">
+                    {/* 경로 복사 버튼 */}
+                    <td className="px-2 py-2 text-center">
+                      <button
+                        onClick={() => copyPath(sw)}
+                        className="text-gray-400 hover:text-gray-700 cursor-pointer text-sm"
+                        title={buildFullPath(sw)}
+                      >
+                        {copyFeedback === sw.sale_id ? '✓' : '📋'}
+                      </button>
+                    </td>
                     <td className="px-3 py-2 sticky left-0 bg-white z-10 font-mono text-xs">
                       {sw.shoot_date ? sw.shoot_date.slice(2).replace(/-/g, '/') : '-'}
                     </td>
                     <td className="px-3 py-2 text-xs">
-                      {sw.shoot_type || '-'}{sw.people_count ? ` ${sw.people_count}인` : ''}
+                      {sw.shoot_type_label || '-'}{sw.people_count ? ` ${sw.people_count}인` : ''}
                     </td>
                     <td className="px-3 py-2">
                       <button

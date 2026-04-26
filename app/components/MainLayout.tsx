@@ -57,14 +57,17 @@ export default function MainLayout({ children }: { children: React.ReactNode }) 
     )
   }
 
+  const isAdmin = (staff?.level || 0) >= 90
+
   const menus = [
     { href: '/search', label: '조회' },
     { href: '/customer-consult', label: '고객/상담' },
     { href: '/schedule', label: '스케줄' },
-    { href: '/sales', label: '판매' },
+    { href: '/sales/new', label: '판매' },
     { href: '/todo', label: '할일' },
     { href: '/work-status', label: '작업현황' },
     { href: '/products', label: '상품' },
+    ...(isAdmin ? [{ href: '/stats', label: '통계' }] : []),
     { href: '/links', label: 'LINKS' },
   ]
 
